@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     telegram_bot_token: str
     telegram_chat_id: str
     
+    # Motive API Configuration
+    motive_api_token: str
+    
     # Server Configuration
     host: str = "0.0.0.0"
     port: int = 8000  # Railway sets PORT env var, which will override this

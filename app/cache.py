@@ -1,4 +1,4 @@
-"""In-memory LRU cache for driver ID to name mapping."""
+"""In-memory LRU cache for vehicle ID to unit number mapping."""
 from typing import Optional
 from cachetools import LRUCache
 import asyncio
@@ -28,5 +28,5 @@ class AsyncLRUCache:
             self._cache.clear()
 
 
-# Global cache instance
-driver_cache = AsyncLRUCache(maxsize=100)
+# Global cache instance for vehicle unit numbers
+vehicle_cache = AsyncLRUCache(maxsize=100)

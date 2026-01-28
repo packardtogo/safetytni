@@ -1,11 +1,20 @@
 """FastAPI application main module."""
 import json
+import logging
+from typing import Any, List, Union
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, status
 from fastapi.responses import JSONResponse
 from app.config import settings
 from app.models import SpeedingEvent
 from app.security import verify_webhook_signature
-from app.telegram_bot import send_speeding_alert, init_bot, close_bot
+from app.telegram_bot import process_alert, init_bot, close_bot
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 app = FastAPI(
@@ -60,38 +69,69 @@ async def motive_webhook(
         verify_webhook_signature(body_bytes, signature, settings.webhook_secret)
         
         # Step 3: Parse the request body
-        payload_dict = json.loads(body_bytes)
-        
-        # Step 4: Check action type (EFFICIENCY - filter early)
-        action = payload_dict.get("action")
-        if action != "speeding_event_created":
-            # Return 200 OK but don't process
-            return JSONResponse(
-                status_code=status.HTTP_200_OK,
-                content={"status": "ignored", "reason": f"Action '{action}' not processed"}
-            )
-        
-        # Step 5: Validate the payload structure (TYPING - use Pydantic)
         try:
-            event = SpeedingEvent.model_validate(payload_dict)
-        except Exception as e:
-            # Invalid payload structure
+            payload: Union[List[Any], Any] = json.loads(body_bytes)
+        except json.JSONDecodeError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid payload structure: {str(e)}"
+                detail="Invalid JSON payload"
             )
-        
-        # Step 6: Schedule Telegram notification in background (ASYNC/NON-BLOCKING)
-        background_tasks.add_task(send_speeding_alert, payload_dict)
-        
-        # Step 7: Return 200 OK immediately (within 2 seconds constraint)
+
+        # Normalize to a list of event dicts
+        if isinstance(payload, list):
+            events_raw: List[Any] = payload
+            logger.info(f"Webhook batch received with {len(events_raw)} events")
+        else:
+            events_raw = [payload]
+            logger.info(
+                "Webhook event received: action=%s, id=%s",
+                payload.get("action") if isinstance(payload, dict) else None,
+                payload.get("id") if isinstance(payload, dict) else None,
+            )
+
+        accepted_events: List[int] = []
+
+        # Process each event in the batch
+        for raw in events_raw:
+            if not isinstance(raw, dict):
+                logger.error(f"Skipping non-object event payload: {raw!r}")
+                continue
+
+            action = raw.get("action")
+            if action != "speeding_event_created":
+                logger.info(f"Event ignored: action '{action}' not processed")
+                continue
+
+            # Validate structure
+            try:
+                event = SpeedingEvent.model_validate(raw)
+            except Exception as e:
+                logger.error(f"Invalid payload structure for event: {e}")
+                continue
+
+            # Schedule Telegram notification in background (ASYNC/NON-BLOCKING)
+            background_tasks.add_task(process_alert, raw)
+            accepted_events.append(event.id)
+
+        # Step 4: Return 200 OK immediately (within 2 seconds constraint)
+        if not accepted_events:
+            # No events were accepted, but we still return 200 to Motive
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "status": "ignored",
+                    "reason": "No qualifying 'speeding_event_created' events in payload",
+                },
+            )
+
+        logger.info(f"Events queued for processing: {accepted_events}")
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
                 "status": "accepted",
-                "event_id": event.id,
-                "message": "Event queued for processing"
-            }
+                "event_ids": accepted_events,
+                "message": f"{len(accepted_events)} event(s) queued for processing",
+            },
         )
         
     except HTTPException:
@@ -103,8 +143,8 @@ async def motive_webhook(
             detail="Invalid JSON payload"
         )
     except Exception as e:
-        # Log unexpected errors (in production, use proper logging)
-        print(f"Unexpected error processing webhook: {e}")
+        # Log unexpected errors
+        logger.error(f"Unexpected error processing webhook: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"

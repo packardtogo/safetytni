@@ -1,4 +1,5 @@
 """Pydantic models for Motive webhook payloads."""
+from typing import Optional
 from pydantic import BaseModel, Field
 
 
@@ -12,7 +13,7 @@ class SpeedingEvent(BaseModel):
     max_vehicle_speed: float = Field(..., alias="max_vehicle_speed", description="Maximum vehicle speed in KPH")
     driver_id: int = Field(..., alias="driver_id", description="Driver ID")
     vehicle_id: int = Field(..., alias="vehicle_id", description="Vehicle ID")
-    status: str = Field(..., description="Event status")
+    status: Optional[str] = Field(default=None, description="Event status")
     
     model_config = {
         "populate_by_name": True,
