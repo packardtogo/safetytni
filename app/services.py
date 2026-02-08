@@ -1,7 +1,7 @@
 """Service layer for external API integrations."""
 import logging
 from typing import Any, Dict, Optional
-
+import asyncio
 import httpx
 
 from app.cache import vehicle_cache
@@ -20,7 +20,10 @@ async def fetch_speeding_details(event_id: int) -> Optional[Dict[str, Any]]:
     Fetch speeding event details from Motive API (API-first source of truth for location).
     GET https://api.gomotive.com/v1/speeding_events/{event_id}
     Returns dict with lat, lon, speed, limit, vehicle_id (or None on error).
+    Added a 5-second delay to prevent 404 race conditions.
     """
+    await asyncio.sleep(5) 
+
     url = f"https://api.gomotive.com/v1/speeding_events/{event_id}"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
